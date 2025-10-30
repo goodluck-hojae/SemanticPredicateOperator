@@ -31,35 +31,76 @@ class LayerManager:
     def num_layers(self):
         return len(self.model_layers)
     
-    def switch_active_layers(self):
+    @torch.no_grad()
+    def switch_active_layers(self, start_layer: int = None):
         with torch.no_grad():
             for layer in self.active_layers:
-                layer.to('cpu', non_blocking=True)
+                layer.to('cpu')
             self.active_layers.clear()
 
-
         total_layers = len(self.model_layers)
-        start = self.top_layer if self.top_layer < total_layers else 0
-        end = min(start + self.layer_capacity, total_layers)
+        block = self.layer_capacity
 
-        # load next block of layers
-        with torch.no_grad():
-            for layer in self.model_layers[start:end]:
-                self.active_layers.append(layer.to(self.device, non_blocking=True))
+        if start_layer is None:
+            # next block
+            start = self.top_layer if self.top_layer < total_layers else 0
+        else:
+            # specified block
+            start = max(0, min(start_layer, total_layers - 1))
+
+        end = min(start + block, total_layers)
+
+        for layer in self.model_layers[start:end]:
+            self.active_layers.append(layer.to(self.device, non_blocking=True))
+
         self.top_layer = end
+        print(f">> Loaded layers {start}–{end-1} on {self.device}")
+
 
     @torch.no_grad()
     def execute_hiddens(self, hiddens, layer_id):
-        with torch.no_grad(): 
-            for h in hiddens:
-                h.hidden = h.hidden.to(self.device, non_blocking=True)
-                h.hidden = self.model_layers[layer_id](h.hidden)
-                h.layer_idx += 1
-        
-        import time
-        time.sleep(0.5)
+        streams = [torch.cuda.Stream() for _ in hiddens]
+
+        for h, s in zip(hiddens, streams):
+            self.forward_layer(h, layer_id, stream=s)
+
+        for s in streams:
+            s.synchronize()
+
         return hiddens
     
+
+    @torch.no_grad()
+    def forward_layer(self, hidden, layer_id, stream=None):
+        layer = self.model_layers[layer_id]
+
+        hidden.states = hidden.states.to(self.device, non_blocking=True)
+
+        # Stream
+        if stream is not None:
+            with torch.cuda.stream(stream):
+                hidden.states = layer(hidden.states)
+                hidden.layer_idx += 1
+        else:
+            # Synchronous
+            hidden.states = layer(hidden.states)
+            hidden.layer_idx += 1
+
+
+    @torch.no_grad()
+    def forward_layer(self, hidden, layer_id, stream=None):
+        next_hidden_states = self.model_layers[layer_id](
+            hidden.states,
+            attention_mask=None,
+            position_ids=hidden.pos_ids,
+            past_key_values=None,
+            use_cache=True,
+            cache_position=hidden.pos_ids,
+            position_embeddings=hidden.pos_emb,
+        )
+        hidden.layer_idx += 1
+        hidden.states = next_hidden_states
+
     @torch.no_grad()
     def process_input_tokens(self, input_ids, prompt=None):
         inputs_embeds = self.embed_tokens(input_ids)
@@ -68,9 +109,13 @@ class LayerManager:
 
         hidden_states = inputs_embeds
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
-        return hidden_states, position_embeddings
+        return hidden_states, position_ids, position_embeddings
 
 
+    def check_layer_device(self):
+        for layer in self.model_layers:
+            print(next(layer.parameters())[0].device)
+        
 # test code
 if __name__ == '__main__':
     
@@ -101,8 +146,8 @@ if __name__ == '__main__':
 
     prompt = 'How are you?'
     input_ids = tok(prompt, return_tensors="pt").to("cuda")['input_ids']
-    hidden_states, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
-    pool.store(0, Hidden(id=0, hidden=hidden_states, prompt=prompt, pos_emb=position_embeddings))
+    hidden_states, position_ids, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
+    pool.store(0, Hidden(id=0, states=hidden_states, prompt=prompt, pos_ids=position_ids, pos_emb=position_embeddings))
     print(tok, model)
     layer_manager.switch_active_layers()
     

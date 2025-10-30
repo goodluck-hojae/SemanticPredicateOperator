@@ -1,19 +1,20 @@
 
 class Hidden:
-    def __init__(self, id, hidden, prompt, pos_emb):
+    def __init__(self, id, states, prompt, pos_ids, pos_emb):
         self.id = id
         self.prompt = prompt
         self.layer_idx = 0
-        self.hidden = hidden
+        self.states = states
+        self.pos_ids = pos_ids
         self.pos_emb = pos_emb
 
     def to(self, device='cuda', non_blocking=True):
-        self.hidden = self.hidden.to(device, non_blocking=non_blocking)
+        self.states = self.states.to(device, non_blocking=non_blocking)
         self.pos_emb = [emb.to(device, non_blocking=non_blocking) for emb in self.pos_emb]
         return self
         
     def __repr__(self):
-        h_shape = getattr(self.hidden, "shape", None)
+        h_shape = getattr(self.states, "shape", None)
         p_shape = getattr(self.pos_emb[0], "shape", None)
         return (
             f"Hidden("
