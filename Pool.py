@@ -48,7 +48,7 @@ class LayerwiseHiddenPool:
 if __name__ == '__main__':
 
     import os, sys
-    from Layer import LayerManager
+    from Model import LayerManager
     from accelerate.hooks import remove_hook_from_module
 
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../transformers/src"))

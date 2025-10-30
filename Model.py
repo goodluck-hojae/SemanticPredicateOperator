@@ -2,10 +2,11 @@ import torch
 from Hidden import Hidden
 
 class LayerManager:
-    def __init__(self, model, pool, device='cuda'):
+    def __init__(self, model, tokenizer, pool, device='cuda'):
         self.active_layers = []
         self.device = device
         self._init(model)
+        self.tokenizer = tokenizer
         self.pool = pool
 
 
@@ -100,6 +101,11 @@ class LayerManager:
         )
         hidden.layer_idx += 1
         hidden.states = next_hidden_states
+        logits =self.lm_head(self.norm(hidden.states)[:, -1, :])
+        topK = torch.topk(logits[0], k=3)
+        top_tokens = [self.tokenizer.decode([tok]) for tok in topK.indices.tolist()]
+        if layer_id == len(self.model_layers)-1:
+            print(layer_id, top_tokens)
 
     @torch.no_grad()
     def process_input_tokens(self, input_ids, prompt=None):
@@ -142,7 +148,7 @@ if __name__ == '__main__':
         remove_hook_from_module(module)
 
     pool = LayerwiseHiddenPool()
-    layer_manager = LayerManager(model, pool)
+    layer_manager = LayerManager(model, tok, pool)
 
     prompt = 'How are you?'
     input_ids = tok(prompt, return_tensors="pt").to("cuda")['input_ids']
