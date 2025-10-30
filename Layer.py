@@ -1,0 +1,107 @@
+import torch 
+from Hidden import Hidden
+
+class LayerManager:
+    def __init__(self, model, pool, device='cuda'):
+        self.active_layers = []
+        self.device = device
+        self._init(model)
+        self.pool = pool
+
+
+    def _init(self, model):
+        self.embed_tokens = model.model.embed_tokens
+        self.norm = model.model.norm
+        self.rotary_emb = model.model.rotary_emb
+        self.model_layers = model.model.layers
+        self.lm_head = model.lm_head
+        self.layer_capacity = self._layer_capacity(self.model_layers[0])
+
+        # Check available VRAM and decide how many layers it holds
+        for layer in self.model_layers[:self.layer_capacity]:
+            self.active_layers.append(layer.to(self.device, non_blocking=True))
+
+        self.top_layer = self.layer_capacity
+
+    def _layer_capacity(self, layer, device='cuda'):
+        # Check layer size & Check available GPU
+        layer_capacity = 8
+        return layer_capacity
+
+    def num_layers(self):
+        return len(self.model_layers)
+    
+    def switch_active_layers(self):
+        with torch.no_grad():
+            for layer in self.active_layers:
+                layer.to('cpu', non_blocking=True)
+            self.active_layers.clear()
+
+
+        total_layers = len(self.model_layers)
+        start = self.top_layer if self.top_layer < total_layers else 0
+        end = min(start + self.layer_capacity, total_layers)
+
+        # load next block of layers
+        with torch.no_grad():
+            for layer in self.model_layers[start:end]:
+                self.active_layers.append(layer.to(self.device, non_blocking=True))
+        self.top_layer = end
+
+    @torch.no_grad()
+    def execute_hiddens(self, hiddens, layer_id):
+        with torch.no_grad(): 
+            for h in hiddens:
+                h.hidden = h.hidden.to(self.device, non_blocking=True)
+                h.hidden = self.model_layers[layer_id](h.hidden)
+                h.layer_idx += 1
+        
+        # self.pool.store(h.layer_idx, h) 
+        import time
+        time.sleep(0.5)
+        return hiddens
+    
+    @torch.no_grad()
+    def process_input_tokens(self, input_ids, prompt=None):
+        inputs_embeds = self.embed_tokens(input_ids)
+        cache_position = torch.arange(0, inputs_embeds.shape[1], device=inputs_embeds.device)
+        position_ids = cache_position.unsqueeze(0)
+
+        hidden_states = inputs_embeds
+        position_embeddings = self.rotary_emb(hidden_states, position_ids)
+        return hidden_states, position_embeddings
+
+
+if __name__ == '__main__':
+    
+    import os, sys
+    from Pool import LayerwiseHiddenPool
+    from accelerate.hooks import remove_hook_from_module
+
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../transformers/src"))
+    print(project_root)
+    sys.path.insert(0, project_root) 
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    model_name = '/datasets/ai/llama3/hub/models--meta-llama--Llama-3.2-1B/snapshots/4e20de362430cd3b72f300e6b0f18e50e7166e08'
+    tok = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, 
+                                                device_map={
+                                                        "model.embed_tokens": "cuda",
+                                                        **{f"model.layers.{i}": "cpu" for i in range(16)},  # all but last 2
+                                                        "model.norm": "cuda",
+                                                        "lm_head": "cuda",
+                                                    })
+    model.eval()
+    for module in model.modules():
+        remove_hook_from_module(module)
+
+    pool = LayerwiseHiddenPool()
+    layer_manager = LayerManager(model, pool)
+
+    prompt = 'How are you?'
+    input_ids = tok(prompt, return_tensors="pt").to("cuda")['input_ids']
+    hidden_states, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
+    pool.store(0, Hidden(id=0, hidden=hidden_states, prompt=prompt, pos_emb=position_embeddings))
+    print(tok, model)
+    
