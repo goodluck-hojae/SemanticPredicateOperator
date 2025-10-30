@@ -25,7 +25,7 @@ class LayerManager:
 
     def _layer_capacity(self, layer, device='cuda'):
         # Check layer size & Check available GPU
-        layer_capacity = 8
+        layer_capacity = 4
         return layer_capacity
 
     def num_layers(self):
@@ -56,7 +56,6 @@ class LayerManager:
                 h.hidden = self.model_layers[layer_id](h.hidden)
                 h.layer_idx += 1
         
-        # self.pool.store(h.layer_idx, h) 
         import time
         time.sleep(0.5)
         return hiddens
@@ -72,6 +71,7 @@ class LayerManager:
         return hidden_states, position_embeddings
 
 
+# test code
 if __name__ == '__main__':
     
     import os, sys
@@ -104,4 +104,5 @@ if __name__ == '__main__':
     hidden_states, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
     pool.store(0, Hidden(id=0, hidden=hidden_states, prompt=prompt, pos_emb=position_embeddings))
     print(tok, model)
+    layer_manager.switch_active_layers()
     

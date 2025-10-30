@@ -7,7 +7,11 @@ class Hidden:
         self.hidden = hidden
         self.pos_emb = pos_emb
 
-
+    def to(self, device='cuda', non_blocking=True):
+        self.hidden = self.hidden.to(device, non_blocking=non_blocking)
+        self.pos_emb = [emb.to(device, non_blocking=non_blocking) for emb in self.pos_emb]
+        return self
+        
     def __repr__(self):
         h_shape = getattr(self.hidden, "shape", None)
         p_shape = getattr(self.pos_emb[0], "shape", None)
