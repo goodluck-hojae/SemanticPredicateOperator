@@ -22,12 +22,13 @@ class PipelineController:
         hidden_batch, remaining = self.pool.fetch(self.current_layer, batch_size=self.min_batch_size)
         if hidden_batch is None:
             print(f"[Layer {self.current_layer}] No data, waiting...")
-            return self._maybe_backtrack()
+            return self._backtrack()
 
         # Forward
-        hiddens = self.layer_manager.execute_hiddens(hidden_batch, self.current_layer)
+        hiddens = self.layer_manager.execute_hiddens(hidden_batch)
         for h in hiddens:
-            self.pool.store(h, h.layer_idx)
+            if h.exit_layer is None:
+                self.pool.store(h, h.layer_id)
 
         self.layer_batch_counter += 1
         print(f"[Layer {self.current_layer}] Processed {len(hidden_batch)} samples (remaining {remaining})")
@@ -38,7 +39,7 @@ class PipelineController:
 
             # Final layer reached
             if next_layer >= self.layer_manager.num_layers():
-                return self._maybe_backtrack()
+                return self._backtrack()
 
             # Check if next layer pool has enough data
             next_count = self.pool.get_size(next_layer)
@@ -54,7 +55,7 @@ class PipelineController:
                     self.layer_manager.switch_active_layers(start_layer=self.current_layer)
         return True
 
-    def _maybe_backtrack(self):
+    def _backtrack(self):
         total_remaining = sum(len(v) for v in self.pool.hidden_states.values())
         if total_remaining == 0:
             print("All layers empty — pipeline fully complete.")

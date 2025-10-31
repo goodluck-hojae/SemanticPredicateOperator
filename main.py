@@ -41,7 +41,7 @@ prompt = "How are you?" * 10
 input_ids = tok(prompt, return_tensors="pt").to("cuda")["input_ids"]
 
 print("Initializing pool with sample hiddens...")
-for i in range(32000):
+for i in range(100):
     hidden_states, poistion_ids, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
     pool.store(
         layer_id=0,
@@ -59,9 +59,9 @@ print(f"Layer 0 pool initialized with {pool.get_size(0)} hiddens.\n")
 controller = PipelineController(
     layer_manager=layer_manager,
     pool=pool,
-    min_batch_size=10,
-    max_batches_per_layer=2,
-    next_fill_threshold=100,
+    min_batch_size=5,
+    max_batches_per_layer=1,
+    next_fill_threshold=20,
 )
 
 print("=== Starting pipeline loop ===")

@@ -5,11 +5,11 @@ class LayerManager:
     def __init__(self, model, tokenizer, pool, device='cuda'):
         self.active_layers = []
         self.device = device
-        self._init(model)
         self.tokenizer = tokenizer
         self.pool = pool
+        self._init(model)
 
-
+    @torch.no_grad()
     def _init(self, model):
         self.embed_tokens = model.model.embed_tokens
         self.norm = model.model.norm
@@ -59,37 +59,27 @@ class LayerManager:
 
 
     @torch.no_grad()
-    def execute_hiddens(self, hiddens, layer_id):
+    def execute_hiddens(self, hiddens):
         streams = [torch.cuda.Stream() for _ in hiddens]
 
         for h, s in zip(hiddens, streams):
-            self.forward_layer(h, layer_id, stream=s)
+            h.states = h.states.to(self.device, non_blocking=True)
+
+            # Stream
+            if s is not None:
+                with torch.cuda.stream(s):
+                    self.forward_layer(h, h.layer_id)
+            else:
+                self.forward_layer(h, h.layer_id)
 
         for s in streams:
             s.synchronize()
 
         return hiddens
     
-
+    
     @torch.no_grad()
-    def forward_layer(self, hidden, layer_id, stream=None):
-        layer = self.model_layers[layer_id]
-
-        hidden.states = hidden.states.to(self.device, non_blocking=True)
-
-        # Stream
-        if stream is not None:
-            with torch.cuda.stream(stream):
-                hidden.states = layer(hidden.states)
-                hidden.layer_idx += 1
-        else:
-            # Synchronous
-            hidden.states = layer(hidden.states)
-            hidden.layer_idx += 1
-
-
-    @torch.no_grad()
-    def forward_layer(self, hidden, layer_id, stream=None):
+    def forward_layer(self, hidden, layer_id):
         next_hidden_states = self.model_layers[layer_id](
             hidden.states,
             attention_mask=None,
@@ -99,13 +89,29 @@ class LayerManager:
             cache_position=hidden.pos_ids,
             position_embeddings=hidden.pos_emb,
         )
-        hidden.layer_idx += 1
+        hidden.layer_id += 1
         hidden.states = next_hidden_states
+        return self.check_exit_conditions(hidden)
+        
+
+    @torch.no_grad()
+    def check_exit_conditions(self, hidden):
         logits =self.lm_head(self.norm(hidden.states)[:, -1, :])
         topK = torch.topk(logits[0], k=3)
         top_tokens = [self.tokenizer.decode([tok]) for tok in topK.indices.tolist()]
-        if layer_id == len(self.model_layers)-1:
-            print(layer_id, top_tokens)
+        if hidden.layer_id == len(self.model_layers)-1:
+            print(hidden.layer_id, top_tokens)
+            hidden.predictino_token = top_tokens
+            hidden.exit_layer = hidden.layer_id
+
+        import random
+        x = random.choice([5, 10, 15, 20])
+        if hidden.layer_id == x:
+            hidden.predictino_token = top_tokens
+            hidden.exit_layer = hidden.layer_id
+            return True
+        return False
+
 
     @torch.no_grad()
     def process_input_tokens(self, input_ids, prompt=None):
