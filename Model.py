@@ -1,6 +1,7 @@
 import torch 
 from Hidden import Hidden
 
+# TODO: Connect early exit condition
 class LayerManager:
     def __init__(self, model, tokenizer, pool, device='cuda'):
         self.active_layers = []
@@ -24,9 +25,10 @@ class LayerManager:
 
         self.top_layer = self.layer_capacity
 
+    # TODO: Implement this
     def _layer_capacity(self, layer, device='cuda'):
         # Check layer size & Check available GPU
-        layer_capacity = 4
+        layer_capacity = 15
         return layer_capacity
 
     def num_layers(self):
@@ -105,7 +107,7 @@ class LayerManager:
             hidden.exit_layer = hidden.layer_id
 
         import random
-        x = random.choice([5, 10, 15, 20])
+        x = random.choice([40, 42, 44, 48, 50, 55, 60, 75])
         if hidden.layer_id == x:
             hidden.predictino_token = top_tokens
             hidden.exit_layer = hidden.layer_id

@@ -31,9 +31,8 @@ class LayerwiseHiddenPool:
     def get_size(self, layer_id: int):
         return len(self.get(layer_id))
 
-    def release(self, layer_id: int):
-        if layer_id in self.hidden_states:
-            del self.hidden_states[layer_id]
+    def release(self, hidden):
+        self.hidden_states[hidden.layer_id].remove(hidden)
 
     def clear(self):
         self.hidden_states.clear()

@@ -15,8 +15,8 @@ from accelerate.hooks import remove_hook_from_module
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 model_name = "/datasets/ai/llama3/hub/models--meta-llama--Llama-3.2-1B/snapshots/4e20de362430cd3b72f300e6b0f18e50e7166e08"
-model_name = "/datasets/ai/llama3/hub/models--meta-llama--Meta-Llama-3-70B/snapshots/c82494877ce7f6d7d317c56ec081328e382c72fe"
 model_name = "/datasets/ai/llama3/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
+model_name = "/datasets/ai/llama3/hub/models--meta-llama--Meta-Llama-3-70B/snapshots/c82494877ce7f6d7d317c56ec081328e382c72fe"
 tok = AutoTokenizer.from_pretrained(model_name)
 
 print("Loading model...")
@@ -25,7 +25,7 @@ model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.float16,
     device_map={
         "model.embed_tokens": "cuda",
-        **{f"model.layers.{i}": "cpu" for i in range(32)},
+        **{f"model.layers.{i}": "cpu" for i in range(80)},
         "model.norm": "cuda",
         "lm_head": "cuda",
     },
@@ -41,7 +41,7 @@ prompt = "How are you?" * 10
 input_ids = tok(prompt, return_tensors="pt").to("cuda")["input_ids"]
 
 print("Initializing pool with sample hiddens...")
-for i in range(100):
+for i in range(2400):
     hidden_states, poistion_ids, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
     pool.store(
         layer_id=0,
@@ -59,9 +59,8 @@ print(f"Layer 0 pool initialized with {pool.get_size(0)} hiddens.\n")
 controller = PipelineController(
     layer_manager=layer_manager,
     pool=pool,
-    min_batch_size=5,
-    max_batches_per_layer=1,
-    next_fill_threshold=20,
+    min_batch_size=120,
+    max_batches_per_layer=2
 )
 
 print("=== Starting pipeline loop ===")
