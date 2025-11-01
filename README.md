@@ -5,3 +5,4 @@
 - Add prefetch logic
 - Support multiple instance interface for block join
 - Check pin memory for layer switching
+- Concurrent execution within active layers
