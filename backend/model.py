@@ -1,5 +1,5 @@
 import torch 
-from Hidden import Hidden
+from hidden import Hidden
 
 # TODO: Connect early exit condition
 class LayerManager:
@@ -24,12 +24,23 @@ class LayerManager:
             self.active_layers.append(layer.to(self.device, non_blocking=True))
 
         self.top_layer = self.layer_capacity
-
-    # TODO: Implement this
+ 
     def _layer_capacity(self, layer, device='cuda'):
-        # Check layer size & Check available GPU
-        layer_capacity = 15
-        return layer_capacity
+        
+        # Available VRAM
+        props = torch.cuda.get_device_properties(device)
+        total_mem = props.total_memory
+        reserved = torch.cuda.memory_reserved(device)
+        allocated = torch.cuda.memory_allocated(device)
+        free_mem = total_mem - max(reserved, allocated)
+
+        # Layer size
+        param_bytes = sum(p.numel() * p.element_size() for p in layer.parameters())
+        buffer_bytes = sum(b.numel() * b.element_size() for b in layer.buffers())
+        layer_bytes = param_bytes + buffer_bytes
+        # print(free_mem, layer_bytes)
+        print(f'{int((free_mem * 0.7) / layer_bytes)} layers will be allocated in the GPU memory')
+        return int((free_mem * 0.7) / layer_bytes)
 
     def num_layers(self):
         return len(self.model_layers)
@@ -60,6 +71,7 @@ class LayerManager:
         print(f">> Loaded layers {start}–{end-1} on {self.device}")
 
 
+    # TODO: Consider hiddenstates communication between CPU & GPU (prefetch logic)
     @torch.no_grad()
     def execute_hiddens(self, hiddens):
         streams = [torch.cuda.Stream() for _ in hiddens]
@@ -103,13 +115,13 @@ class LayerManager:
         top_tokens = [self.tokenizer.decode([tok]) for tok in topK.indices.tolist()]
         if hidden.layer_id == len(self.model_layers)-1:
             print(hidden.layer_id, top_tokens)
-            hidden.predictino_token = top_tokens
+            hidden.prediction_token = top_tokens
             hidden.exit_layer = hidden.layer_id
 
         import random
         x = random.choice([40, 42, 44, 48, 50, 55, 60, 75])
         if hidden.layer_id == x:
-            hidden.predictino_token = top_tokens
+            hidden.prediction_token = top_tokens
             hidden.exit_layer = hidden.layer_id
             return True
         return False
@@ -134,7 +146,7 @@ class LayerManager:
 if __name__ == '__main__':
     
     import os, sys
-    from Pool import LayerwiseHiddenPool
+    from pool import LayerwiseHiddenPool
     from accelerate.hooks import remove_hook_from_module
 
     project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../transformers/src"))
@@ -143,11 +155,12 @@ if __name__ == '__main__':
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
     model_name = '/datasets/ai/llama3/hub/models--meta-llama--Llama-3.2-1B/snapshots/4e20de362430cd3b72f300e6b0f18e50e7166e08'
+    model_name = "/datasets/ai/llama3/hub/models--meta-llama--Meta-Llama-3-70B/snapshots/c82494877ce7f6d7d317c56ec081328e382c72fe"
     tok = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, 
                                                 device_map={
                                                         "model.embed_tokens": "cuda",
-                                                        **{f"model.layers.{i}": "cpu" for i in range(16)},  # all but last 2
+                                                        **{f"model.layers.{i}": "cpu" for i in range(80)},  # all but last 2
                                                         "model.norm": "cuda",
                                                         "lm_head": "cuda",
                                                     })
@@ -162,6 +175,5 @@ if __name__ == '__main__':
     input_ids = tok(prompt, return_tensors="pt").to("cuda")['input_ids']
     hidden_states, position_ids, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
     pool.store(0, Hidden(id=0, states=hidden_states, prompt=prompt, pos_ids=position_ids, pos_emb=position_embeddings))
-    print(tok, model)
     layer_manager.switch_active_layers()
     

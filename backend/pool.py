@@ -1,5 +1,5 @@
 import torch
-from Hidden import Hidden
+from hidden import Hidden
 
 
 class LayerwiseHiddenPool:

@@ -29,6 +29,7 @@ class PipelineController:
             if h.exit_layer is None:
                 self.pool.store(h, h.layer_id)
             else:
+                print(f'{h.id} hidden states exited early with {h.prediction_token} at hidden.exit_layer {h.exit_layer}')    
                 del h
 
         self.layer_batch_counter += 1
@@ -46,9 +47,9 @@ class PipelineController:
             # Check if next layer pool has enough data
             next_count = self.pool.get_size(next_layer)
             if next_count < self.min_batch_size:
-                print(f"Layer {next_layer} has only {next_count} samples (< {self.min_batch_size}) → stay on layer {self.current_layer}")
+                print(f"Layer {next_layer} has only {next_count} samples (< {self.min_batch_size}) -> stay on layer {self.current_layer}")
             else:
-                print(f"Layer {next_layer} now has {next_count} samples → move to layer {next_layer}")
+                print(f"Layer {next_layer} has enough samples {next_count} (< {self.min_batch_size}) -> move to layer {next_layer}")
                 self.current_layer = next_layer
 
                 # Load next layers to GPU
@@ -68,7 +69,7 @@ class PipelineController:
         for layer_id in range(self.layer_manager.num_layers()):
             count = self.pool.get_size(layer_id)
             if count > 0:
-                print(f"Backtracking: layer {layer_id} still has {count} samples → loading its block.")
+                print(f"Backtracking: layer {layer_id} still has {count} samples -> loading its block.")
                 self.current_layer = layer_id
                 self.layer_manager.switch_active_layers(start_layer=layer_id)
                 return True
