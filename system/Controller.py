@@ -34,7 +34,7 @@ class PipelineController:
         self.layer_batch_counter += 1
         print(f"[Layer {self.current_layer}] Processed {len(hidden_batch)} samples (remaining {remaining})")
 
-        # Move to next layers after fetch data (max_batches_per_layer) times
+        # Move to next layers after fetch data (max_batches_per_layer) times, else, It stays the current layer
         if self.layer_batch_counter >= self.max_batches_per_layer or remaining == 0:
             self.layer_batch_counter = 0
             next_layer = self.current_layer + 1
