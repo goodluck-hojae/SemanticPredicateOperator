@@ -58,13 +58,10 @@ if __name__ == '__main__':
     model_name = '/datasets/ai/llama3/hub/models--meta-llama--Llama-3.2-1B/snapshots/4e20de362430cd3b72f300e6b0f18e50e7166e08'
     tok = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, 
-                                            device_map={
-                                                    "model.embed_tokens": "cuda",
-                                                    **{f"model.layers.{i}": "cpu" for i in range(16)},  # all but last 2
-                                                    "model.norm": "cuda",
-                                                    "lm_head": "cuda",
-                                                })
+                                            device_map='cpu')
     model.eval()
+    
+    # Disable hook to allocate all layers on cpu at the beginning
     for module in model.modules():
         remove_hook_from_module(module)
 
