@@ -65,7 +65,6 @@ if __name__ == '__main__':
     for module in model.modules():
         remove_hook_from_module(module)
 
-
     pool = LayerwiseHiddenPool()
     layer_manager = LayerManager(model, pool)
     prompt = 'How are you?' * 100

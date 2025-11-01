@@ -24,9 +24,17 @@ class LayerManager:
             self.active_layers.append(layer.to(self.device, non_blocking=True))
 
         self.top_layer = self.layer_capacity
- 
-    def _layer_capacity(self, layer, device='cuda'):
+    
+    def is_layer_active(self, layer_id):
+         
+        end = self.top_layer
+        start = max(0, self.top_layer - self.layer_capacity + 1)
+        if start <= layer_id and layer_id < end:
+            return True
+        return False
         
+        
+    def _layer_capacity(self, layer, device='cuda'):
         # Available VRAM
         props = torch.cuda.get_device_properties(device)
         total_mem = props.total_memory

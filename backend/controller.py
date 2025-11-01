@@ -49,7 +49,7 @@ class PipelineController:
             if next_count < self.min_batch_size:
                 print(f"Layer {next_layer} has only {next_count} samples (< {self.min_batch_size}) -> stay on layer {self.current_layer}")
             else:
-                print(f"Layer {next_layer} has enough samples {next_count} (< {self.min_batch_size}) -> move to layer {next_layer}")
+                print(f"Layer {next_layer} has enough samples {next_count} (> {self.min_batch_size}) -> move to layer {next_layer}")
                 self.current_layer = next_layer
 
                 # Load next layers to GPU
@@ -71,7 +71,8 @@ class PipelineController:
             if count > 0:
                 print(f"Backtracking: layer {layer_id} still has {count} samples -> loading its block.")
                 self.current_layer = layer_id
-                self.layer_manager.switch_active_layers(start_layer=layer_id)
+                if not self.layer_manager.is_layer_active(self.current_layer):
+                    self.layer_manager.switch_active_layers(start_layer=layer_id)
                 return True
 
         return False
