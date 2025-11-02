@@ -15,7 +15,7 @@ class PipelineController:
         self.current_layer = 0
         self.layer_batch_counter = 0
 
-    def step(self):
+    def step(self, early_exit=True):
         # Fetch
         hidden_batch, remaining = self.pool.fetch(self.current_layer, batch_size=self.min_batch_size)
         if hidden_batch is None:
@@ -24,10 +24,13 @@ class PipelineController:
             return self._backtrack()
 
         # Forward
-        hiddens = self.layer_manager.execute_hiddens(hidden_batch)
+        hiddens = self.layer_manager.execute_hiddens(hidden_batch, early_exit)
         for h in hiddens:
             if h.exit_layer is None:
                 self.pool.store(h, h.layer_id)
+            elif h.layer_id == self.layer_manager.num_layers():
+                print(f'{h.id} hidden states exited at the last layer with {h.prediction_token} at hidden.exit_layer {h.exit_layer}')    
+                del h
             else:
                 print(f'{h.id} hidden states exited early with {h.prediction_token} at hidden.exit_layer {h.exit_layer}')    
                 del h
@@ -60,7 +63,7 @@ class PipelineController:
             
 
     def _backtrack(self):
-        total_remaining = sum(len(v) for v in self.pool.hidden_states.values())
+        total_remaining = len(self.pool)
         if total_remaining == 0:
             print("All layers empty — pipeline fully complete.")
             return False
@@ -72,6 +75,7 @@ class PipelineController:
                 print(f"Backtracking: layer {layer_id} still has {count} samples -> loading its block.")
                 self.current_layer = layer_id
                 if not self.layer_manager.is_layer_active(self.current_layer):
+                    print(f"Swapping active layer block: loading from layer in backtrack {self.current_layer}")
                     self.layer_manager.switch_active_layers(start_layer=layer_id)
                 return True
 
