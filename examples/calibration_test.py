@@ -1,116 +1,165 @@
+import os, sys
 
-import utils
-import os
-import json
-import argparse
-from llm_brake import LLM_Brake
-from Data import biodex, fever, arxiv, boolq
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../transformers/src"))
+print(project_root)
+sys.path.insert(0, project_root) 
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+backend_path = os.path.join(project_root, "backend")
+calibration_path = os.path.join(project_root, "calibration")
+sys.path.extend([backend_path, calibration_path])
+
+
+import torch
 import time
-import utils
+from hidden import Hidden
+from pool import LayerwiseHiddenPool
+from model import LayerManager
+from controller import PipelineController
+
+from accelerate.hooks import remove_hook_from_module
+from transformers import AutoModelForCausalLM, AutoTokenizer 
+import torch.nn.functional as F
+from calibrate import Calibration
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "--model_name",
-    type=str,
-    # default='/datasets/ai/llama3/hub/models--meta-llama--Llama-3.2-3B-Instruct/snapshots/0cb88a4f764b7a12671c53f0838cd831a0843b95'
-    # default='/datasets/ai/llama3/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659',
-    # default='/datasets/ai/qwen/hub/models--Qwen--Qwen2.5-32B-Instruct/snapshots/5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd'
-    # default='/datasets/ai/qwen/hub/models--Qwen--Qwen2.5-7B-Instruct/snapshots/a09a35458c702b33eeacc393d103063234e8bc28'
-    # default='/datasets/ai/phi/hub/models--microsoft--Phi-3.5-mini-instruct/snapshots/3145e03a9fd4cdd7cd953c34d9bbf7ad606122ca', 
-    # default='/datasets/ai/falcon/hub/models--tiiuae--falcon-40b/snapshots/05ab2ee8d6b593bdbab17d728de5c028a7a94d83'
-    # default='/datasets/ai/yi/hub/models--01-ai--Yi-34B/snapshots/e1fa7c83283f2e1d5a12cb4adea37c3f829e28f8'
-    default= '/datasets/ai/llama3/hub/models--meta-llama--Llama-3.3-70B-Instruct/snapshots/6f6073b423013f6a7d4d9f39144961bfbfbc386b'
-)
-parser.add_argument(
-    "--quantization",
-    type=int,
-    default=None,
-    help="Quantization bit width (e.g., 4, 8)"
-)
+def calibrate(calibrator):    
+    true_false_items = [
+        ("A transformer model processes tokens in parallel. True or false?", True),
+        ("Cross-entropy loss is commonly used for classification tasks. True or false?", True),
+        ("Softmax outputs do not sum to one. True or false?", False),
+        ("Dropout is used to reduce overfitting. True or false?", True),
+        ("The KV cache speeds up autoregressive decoding. True or false?", True),
+        ("Batch normalization is standard in transformer architectures. True or false?", False),
+        ("FP16 has higher precision than FP32. True or false?", False),
+        ("In self-attention, queries attend only to external input, never to themselves. True or false?", False),
+        ("Overfitting means performing well on training data but poorly on unseen data. True or false?", True),
+        ("In causal language models, future tokens are masked during training. True or false?", True),
+    ]
+  
+    print("Collecting sample hiddens...")
+    hidden_states_list = []
+    for i in range(len(true_false_items)):
+        prompt = true_false_items[i][0]
+        input_ids = tok(prompt, return_tensors="pt").to("cuda")["input_ids"]
+        hidden_states, poistion_ids, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
+        hidden=Hidden(
+            id=i,
+            states=hidden_states.clone(),
+            prompt=prompt,
+            pos_ids=poistion_ids,
+            pos_emb=position_embeddings,
+        )
+        full_hidden_states = []
+        for layer_id in range(layer_manager.num_layers()):
+            next_hidden_list = layer_manager.execute_hiddens([hidden], False)
+            top_tokens = calibrator.top_tokens(next_hidden_list[0].states)
+            hidden = next_hidden_list[0]
 
-parser.add_argument(
-    "--start_idx",
-    type=int,
-    default=0,
-)
-args = parser.parse_args()
+            full_hidden_states.append(hidden.states)
+            print(hidden.id, top_tokens, layer_id)
+        hidden_states_list.append(full_hidden_states)
+        print('len(hidden_states_list)', len(hidden_states_list))
+        print('\n')
 
+    print(calibrator.exit_params())
+    calibrator.calibrate_K(hidden_states_list)
+    calibrator.calibrate_threshold(hidden_states_list)
+    print(calibrator.exit_params())
 
-def run(start_idx):
-    # gen = fever.yield_llm_statement("/home/hojaeson_umass_edu/project/transformers/src/transformers/research/early_exit_sem_join/Data/feverous_dev_challenges.jsonl", 200)
-    # gen = arxiv.yield_arxiv_contradiction_statement()
-    
-    gen = boolq.iter_boolq_validation(max_iter=1000)
-
-    start = time.time()
-    total = 0
-    idx = 0
-    latency_list = []
-    accuracy_list = []
-    while True:
-        case_start = time.time()
-        try:
-            statement, label = next(gen)
-            label = _llm_brake.normalize(str(label))
-            if idx >= start_idx:
-                normal_top_token = _llm_brake.inference(statement, idx)
-                # print('normal_top_token, label', normal_top_token, label)
-                accuracy_list.append(normal_top_token == label)
-            if idx % 100 == 0:
-                print(f'{idx} In progress..')
-        except StopIteration:
-            break
-        
-        latency = time.time() - case_start
-        total += latency
-        latency_list.append(latency)
-        idx += 1
-
-    end = time.time()
-    print(f'accuracy {accuracy_list.count(True)/len(accuracy_list)}')
-    print(f'total time {end - start}')
-    return latency_list, accuracy_list
-
-
-def get_golden_set(path="/home/hojaeson_umass_edu/project/transformer_research/early_exit_sem_join/Data/golden_set.json"):
-    golden_set = []
-    with open(path) as f:
-        data = json.load(f)
-        for idx, row in enumerate(data):
-            evidence, claim = row["evidence"], row["claim"]
-            statement = fever.construct_statement(evidence, claim)
-            golden_set.append(statement)
-    return golden_set
-
-
+# test code
 if __name__ == '__main__':
-    _llm_brake = LLM_Brake()
-    _llm_brake.load(args.model_name, args.quantization)
-
-    golden_set = get_golden_set()
-    print('Calibrating..')
-    _llm_brake.mode = LLM_Brake.CALIBRATION_MODE
-    _llm_brake.calibrate(golden_set)
-
-    print('======================Start Braking mode')
-    _llm_brake.mode = LLM_Brake.BRAKE_MODE
-    _llm_brake.set_layer_listener(_llm_brake.listen_layer)
-    braking_latency, braking_accuracy_list = run(args.start_idx)
-
-    print('======================Start Normal mode')
-    _llm_brake.set_layer_listener(None)
-    normal_latency, normal_accuracy_list = run(args.start_idx)
     
-    print('======================Start Record mode')
-    _llm_brake.mode = LLM_Brake.RECORD_MODE
-    _llm_brake.set_layer_listener(_llm_brake.listen_layer)
-    run(args.start_idx)
-    print(len(_llm_brake.record))
-    # for idx in range(0, len(normal_latency)):
-    #     _llm_brake.record[idx*(_llm_brake.last_layer-1)]['exit_time'] = braking_latency[idx]
-    #     _llm_brake.record[idx*(_llm_brake.last_layer-1)]['normal_time'] = normal_latency[idx]
-    utils.save_record(args.model_name, _llm_brake.record)
-    print('braking_accuracy_list', braking_accuracy_list)
-    print('normal_accuracy_list', normal_accuracy_list)
-    print('Terminating..')
+    import os, sys
+    from pool import LayerwiseHiddenPool
+    from accelerate.hooks import remove_hook_from_module
+
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../transformers/src"))
+    print(project_root)
+    sys.path.insert(0, project_root) 
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+    model_name = "/datasets/ai/llama3/hub/models--meta-llama--Meta-Llama-3-70B/snapshots/c82494877ce7f6d7d317c56ec081328e382c72fe"
+    model_name = '/datasets/ai/llama3/hub/models--meta-llama--Llama-3.2-1B/snapshots/4e20de362430cd3b72f300e6b0f18e50e7166e08'
+    model_name='/datasets/ai/llama3/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659'
+    tok = AutoTokenizer.from_pretrained(model_name)
+
+    print("Loading model...")
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.float16,
+        device_map={
+            "model.embed_tokens": "cuda",
+            **{f"model.layers.{i}": "cpu" for i in range(80)},
+            "model.norm": "cuda",
+            "lm_head": "cuda",
+        },
+    )
+    model.eval()
+    for module in model.modules():
+        remove_hook_from_module(module)
+
+    # Init components
+    pool = LayerwiseHiddenPool()
+    layer_manager = LayerManager(model, tok, pool, device="cuda")
+    controller = PipelineController(
+        layer_manager=layer_manager,
+        pool=pool,
+        min_batch_size=120,
+        max_batches_per_layer=2
+    )
+    calibrator = Calibration(layer_manager)
+
+    # Without this, no early exit
+    layer_manager.set_calibrator(calibrator)
+
+    # Calibrating
+    calibrate(calibrator)
+
+    
+    # Process early exit based on calibrator's exit conditions
+    
+    true_false_items = [
+        ("A transformer model processes tokens in parallel. True or false?", True),
+        ("Cross-entropy loss is commonly used for classification tasks. True or false?", True),
+        ("Softmax outputs do not sum to one. True or false?", False),
+        ("Dropout is used to reduce overfitting. True or false?", True),
+        ("The KV cache speeds up autoregressive decoding. True or false?", True),
+        ("Batch normalization is standard in transformer architectures. True or false?", False),
+        ("FP16 has higher precision than FP32. True or false?", False),
+        ("In self-attention, queries attend only to external input, never to themselves. True or false?", False),
+        ("Overfitting means performing well on training data but poorly on unseen data. True or false?", True),
+        ("In causal language models, future tokens are masked during training. True or false?", True),
+    ] * 50
+    
+    hidden_states_list = []
+    for i in range(len(true_false_items)):
+        prompt = true_false_items[i][0]
+        input_ids = tok(prompt, return_tensors="pt").to("cuda")["input_ids"]
+        hidden_states, poistion_ids, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
+        pool.store(
+            layer_id=0,
+            hidden=Hidden(
+                id=i,
+                states=hidden_states.clone(),
+                prompt=prompt,
+                pos_ids=poistion_ids,
+                pos_emb=position_embeddings,
+            ),
+        )
+
+    print(f"Layer 0 pool initialized with {pool.get_size(0)} hiddens.\n")
+    print("=== Starting pipeline loop ===")
+    start_time = time.time()
+
+    step_count = 0
+    while True:
+        step_count += 1
+        cont = controller.step()
+        if not cont:
+            break
+
+    print(f"=== Done in {time.time() - start_time:.2f}s after {step_count} steps ===")
+
+    for lid, hlist in pool.hidden_states.items():
+        print(f"Layer {lid}: {len(hlist)} remaining hiddens")

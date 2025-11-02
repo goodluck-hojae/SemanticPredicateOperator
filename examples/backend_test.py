@@ -19,9 +19,10 @@ from controller import PipelineController
 from accelerate.hooks import remove_hook_from_module
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-model_name = "/datasets/ai/llama3/hub/models--meta-llama--Llama-3.2-1B/snapshots/4e20de362430cd3b72f300e6b0f18e50e7166e08"
+
 model_name = "/datasets/ai/llama3/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659"
 model_name = "/datasets/ai/llama3/hub/models--meta-llama--Meta-Llama-3-70B/snapshots/c82494877ce7f6d7d317c56ec081328e382c72fe"
+model_name = "/datasets/ai/llama3/hub/models--meta-llama--Llama-3.2-1B/snapshots/4e20de362430cd3b72f300e6b0f18e50e7166e08"
 tok = AutoTokenizer.from_pretrained(model_name)
 
 print("Loading model...")
@@ -46,7 +47,7 @@ prompt = "How are you?" * 10
 input_ids = tok(prompt, return_tensors="pt").to("cuda")["input_ids"]
 
 print("Initializing pool with sample hiddens...")
-for i in range(2400):
+for i in range(600):
     hidden_states, poistion_ids, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
     pool.store(
         layer_id=0,
