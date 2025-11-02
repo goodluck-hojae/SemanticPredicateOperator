@@ -26,14 +26,12 @@ class LayerManager:
         self.top_layer = self.layer_capacity
     
     def is_layer_active(self, layer_id):
-         
         end = self.top_layer
         start = max(0, self.top_layer - self.layer_capacity + 1)
         if start <= layer_id and layer_id < end:
             return True
         return False
-        
-        
+         
     def _layer_capacity(self, layer, device='cuda'):
         # Available VRAM
         props = torch.cuda.get_device_properties(device)
@@ -47,8 +45,9 @@ class LayerManager:
         buffer_bytes = sum(b.numel() * b.element_size() for b in layer.buffers())
         layer_bytes = param_bytes + buffer_bytes
         # print(free_mem, layer_bytes)
-        print(f'{int((free_mem * 0.7) / layer_bytes)} layers will be allocated in the GPU memory')
-        return int((free_mem * 0.7) / layer_bytes)
+        allocated_layers = min(int((free_mem * 0.7) / layer_bytes), self.num_layers())
+        print(f'{allocated_layers} layers will be allocated in the GPU memory')
+        return allocated_layers
 
     def num_layers(self):
         return len(self.model_layers)
@@ -81,7 +80,7 @@ class LayerManager:
 
     # TODO: Consider hiddenstates communication between CPU & GPU (prefetch logic)
     @torch.no_grad()
-    def execute_hiddens(self, hiddens):
+    def execute_hiddens(self, hiddens, early_exit=False):
         streams = [torch.cuda.Stream() for _ in hiddens]
 
         for h, s in zip(hiddens, streams):
@@ -90,9 +89,9 @@ class LayerManager:
             # Stream
             if s is not None:
                 with torch.cuda.stream(s):
-                    self.forward_layer(h, h.layer_id)
+                    self.forward_layer(h, early_exit)
             else:
-                self.forward_layer(h, h.layer_id)
+                self.forward_layer(h, early_exit)
 
         for s in streams:
             s.synchronize()
@@ -101,8 +100,8 @@ class LayerManager:
     
     
     @torch.no_grad()
-    def forward_layer(self, hidden, layer_id):
-        next_hidden_states = self.model_layers[layer_id](
+    def forward_layer(self, hidden, early_exit=True):
+        next_hidden_states = self.model_layers[hidden.layer_id](
             hidden.states,
             attention_mask=None,
             position_ids=hidden.pos_ids,
@@ -113,18 +112,20 @@ class LayerManager:
         )
         hidden.layer_id += 1
         hidden.states = next_hidden_states
-        return self.check_exit_conditions(hidden)
+
+        # Exit at last layer 
+        if hidden.layer_id == self.num_layers():
+            print('ee')
+            top_tokens = self._top_tokens(hidden)
+            hidden.prediction_token = top_tokens
+            hidden.exit_layer = hidden.layer_id
+            return True
+        return self.check_exit_conditions(hidden, early_exit) if early_exit else False
         
 
     @torch.no_grad()
     def check_exit_conditions(self, hidden):
-        logits =self.lm_head(self.norm(hidden.states)[:, -1, :])
-        topK = torch.topk(logits[0], k=3)
-        top_tokens = [self.tokenizer.decode([tok]) for tok in topK.indices.tolist()]
-        if hidden.layer_id == len(self.model_layers)-1:
-            print(hidden.layer_id, top_tokens)
-            hidden.prediction_token = top_tokens
-            hidden.exit_layer = hidden.layer_id
+        top_tokens = self._top_tokens(hidden)
 
         import random
         x = random.choice([40, 42, 44, 48, 50, 55, 60, 75])
@@ -133,6 +134,14 @@ class LayerManager:
             hidden.exit_layer = hidden.layer_id
             return True
         return False
+
+
+    @torch.no_grad()
+    def _top_tokens(self, hidden):
+        logits =self.lm_head(self.norm(hidden.states)[:, -1, :])
+        topK = torch.topk(logits[0], k=3)
+        top_tokens = [self.tokenizer.decode([tok]) for tok in topK.indices.tolist()]
+        return top_tokens
 
 
     @torch.no_grad()
