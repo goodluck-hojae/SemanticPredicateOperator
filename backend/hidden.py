@@ -21,7 +21,7 @@ class Hidden:
         return (
             f"Hidden("
             f"id={self.id!r}, "
-            f"prompt={self.prompt!r}, "
+            f"prompt={self.prompt[:20]!r}, "
             f"layer_id={self.layer_id}, "
             f"hidden_shape={h_shape}, "
             f"pos_emb_shape={p_shape}"

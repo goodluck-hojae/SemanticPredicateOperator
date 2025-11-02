@@ -1,7 +1,7 @@
 import torch 
+import torch.nn.functional as F
 from hidden import Hidden
 
-# TODO: Connect early exit condition
 class LayerManager:
     def __init__(self, model, tokenizer, pool, device='cuda'):
         self.active_layers = []
@@ -25,9 +25,12 @@ class LayerManager:
 
         self.top_layer = self.layer_capacity
     
+    def set_calibrator(self, calibrator):
+        self.calibrator = calibrator
+        
     def is_layer_active(self, layer_id):
         end = self.top_layer
-        start = max(0, self.top_layer - self.layer_capacity + 1)
+        start = max(0, self.top_layer - self.layer_capacity) #+1
         if start <= layer_id and layer_id < end:
             return True
         return False
@@ -80,7 +83,7 @@ class LayerManager:
 
     # TODO: Consider hiddenstates communication between CPU & GPU (prefetch logic)
     @torch.no_grad()
-    def execute_hiddens(self, hiddens, early_exit=False):
+    def execute_hiddens(self, hiddens, early_exit=True):
         streams = [torch.cuda.Stream() for _ in hiddens]
 
         for h, s in zip(hiddens, streams):
@@ -115,33 +118,25 @@ class LayerManager:
 
         # Exit at last layer 
         if hidden.layer_id == self.num_layers():
-            print('ee')
-            top_tokens = self._top_tokens(hidden)
-            hidden.prediction_token = top_tokens
+            top_tokens = self.top_tokens(hidden.states)
+            hidden.prediction_token = top_tokens[0]
             hidden.exit_layer = hidden.layer_id
             return True
-        return self.check_exit_conditions(hidden, early_exit) if early_exit else False
+        return self.check_exit_conditions(hidden) if early_exit else False
         
 
     @torch.no_grad()
     def check_exit_conditions(self, hidden):
-        top_tokens = self._top_tokens(hidden)
-
-        import random
-        x = random.choice([40, 42, 44, 48, 50, 55, 60, 75])
-        if hidden.layer_id == x:
-            hidden.prediction_token = top_tokens
+        if self.calibrator is None:
+            return False
+        calibrator = self.calibrator
+        exit = calibrator.check_exit(hidden.states)
+        if exit:
+            top_tokens = self.top_tokens(hidden.states)
+            hidden.prediction_token = top_tokens[0]
             hidden.exit_layer = hidden.layer_id
             return True
         return False
-
-
-    @torch.no_grad()
-    def _top_tokens(self, hidden):
-        logits =self.lm_head(self.norm(hidden.states)[:, -1, :])
-        topK = torch.topk(logits[0], k=3)
-        top_tokens = [self.tokenizer.decode([tok]) for tok in topK.indices.tolist()]
-        return top_tokens
 
 
     @torch.no_grad()
@@ -154,11 +149,18 @@ class LayerManager:
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
         return hidden_states, position_ids, position_embeddings
 
-
     def check_layer_device(self):
         for layer in self.model_layers:
             print(next(layer.parameters())[0].device)
         
+
+    @torch.no_grad()
+    def top_tokens(self, hidden_state):
+        logits = self.lm_head(self.norm(hidden_state)[:, -1, :])
+        topK = torch.topk(logits[0], k=10)
+        top_tokens = [self.tokenizer.decode([tok]) for tok in topK.indices.tolist()]
+        return top_tokens
+
 # test code
 if __name__ == '__main__':
     

@@ -29,7 +29,7 @@ class PipelineController:
             if h.exit_layer is None:
                 self.pool.store(h, h.layer_id)
             elif h.layer_id == self.layer_manager.num_layers():
-                print(f'{h.id} hidden states exited at the last layer with {h.prediction_token} at hidden.exit_layer {h.exit_layer}')    
+                print(f'{h.id} hidden states exited at the last layer with *-- {h.prediction_token} token --* at hidden.exit_layer {h.exit_layer}')
                 del h
             else:
                 print(f'{h.id} hidden states exited early with {h.prediction_token} at hidden.exit_layer {h.exit_layer}')    
@@ -56,7 +56,7 @@ class PipelineController:
                 self.current_layer = next_layer
 
                 # Load next layers to GPU
-                if self.current_layer >= self.layer_manager.top_layer:
+                if self.current_layer >= self.layer_manager.top_layer and not self.layer_manager.is_layer_active(self.current_layer):
                     print(f"Swapping active layer block: loading from layer {self.current_layer}")
                     self.layer_manager.switch_active_layers(start_layer=self.current_layer)
         return True
