@@ -50,22 +50,60 @@ def calibrate(calibrator):
             pos_ids=poistion_ids,
             pos_emb=position_embeddings,
         )
-        full_hidden_states = []
-        for layer_id in range(layer_manager.num_layers()):
-            next_hidden_list = layer_manager.execute_hiddens([hidden], False)
-            top_tokens = calibrator.top_tokens(next_hidden_list[0].states)
+        hidden_states_list.append(hidden)
+
+
+
+    print("Collecting sample hiddens...")
+
+    N = len(true_false_items)
+    L = layer_manager.num_layers()
+
+    # pre-allocate (items × layers)
+    hidden_states_list = [[None for _ in range(L)] for _ in range(N)]
+
+    # cache hidden state per item before forward stepping through layers
+    initial_hiddens = []
+    for i in range(N):
+        prompt = true_false_items[i][0]
+        input_ids = tok(prompt, return_tensors="pt").to("cuda")["input_ids"]
+        hidden_states, position_ids, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
+
+        initial_hiddens.append(
+            Hidden(
+                id=i,
+                states=hidden_states.clone(),
+                prompt=prompt,
+                pos_ids=position_ids,
+                pos_emb=position_embeddings,
+            )
+        )
+
+    # iterate layer-major
+    for layer_id in range(L):
+    
+        if not layer_manager.is_layer_active(layer_id):
+            layer_manager.switch_active_layers(start_layer=layer_id)
+
+        new_hidden_list = []
+        for i in range(N):
+            next_hidden_list = layer_manager.execute_hiddens([initial_hiddens[i]], False)
             hidden = next_hidden_list[0]
 
-            full_hidden_states.append(hidden.states)
+            hidden_states_list[i][layer_id] = hidden.states.clone()
+
+            top_tokens = calibrator.top_tokens(hidden.states)
             print(hidden.id, top_tokens, layer_id)
-        hidden_states_list.append(full_hidden_states)
-        print('len(hidden_states_list)', len(hidden_states_list))
-        print('\n')
+
+            new_hidden_list.append(hidden)
+
+        initial_hiddens = new_hidden_list
 
     print(calibrator.exit_params())
     calibrator.calibrate_K(hidden_states_list)
     calibrator.calibrate_threshold(hidden_states_list)
     print(calibrator.exit_params())
+
 
 # test code
 if __name__ == '__main__':
@@ -79,9 +117,9 @@ if __name__ == '__main__':
     sys.path.insert(0, project_root) 
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    model_name = "/datasets/ai/llama3/hub/models--meta-llama--Meta-Llama-3-70B/snapshots/c82494877ce7f6d7d317c56ec081328e382c72fe"
     model_name = '/datasets/ai/llama3/hub/models--meta-llama--Llama-3.2-1B/snapshots/4e20de362430cd3b72f300e6b0f18e50e7166e08'
     model_name='/datasets/ai/llama3/hub/models--meta-llama--Llama-3.1-8B-Instruct/snapshots/0e9e39f249a16976918f6564b8830bc894c89659'
+    model_name = "/datasets/ai/llama3/hub/models--meta-llama--Meta-Llama-3-70B/snapshots/c82494877ce7f6d7d317c56ec081328e382c72fe"
     tok = AutoTokenizer.from_pretrained(model_name)
 
     print("Loading model...")
@@ -118,7 +156,9 @@ if __name__ == '__main__':
 
     
     # Process early exit based on calibrator's exit conditions
-    
+    if not layer_manager.is_layer_active(0):
+        layer_manager.switch_active_layers(start_layer=0)
+
     true_false_items = [
         ("A transformer model processes tokens in parallel. True or false?", True),
         ("Cross-entropy loss is commonly used for classification tasks. True or false?", True),
