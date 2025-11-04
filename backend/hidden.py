@@ -1,6 +1,6 @@
 
 class Hidden:
-    def __init__(self, id, states, prompt, pos_ids, pos_emb):
+    def __init__(self, id, states, prompt, pos_ids, pos_emb, cache_position=None):
         self.id = id
         self.prompt = prompt
         self.layer_id = 0
@@ -9,6 +9,7 @@ class Hidden:
         self.pos_emb = pos_emb
         self.exit_layer = None
         self.prediction_token = None
+        self.cache_position = cache_position
 
     def to(self, device='cuda', non_blocking=True):
         self.states = self.states.to(device, non_blocking=non_blocking)
