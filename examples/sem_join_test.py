@@ -11,6 +11,91 @@ semantic_ops_path = os.path.join(project_root, "semantic_ops")
 sys.path.extend([backend_path, calibration_path, semantic_ops_path])
 
 
+def page_join(pageA, pageB):
+    id=0
+    for tupleA in pageA.prompt_list:
+        for tupleB in pageB.prompt_list:
+            prompt = prompt_constructor.construct_prompt(tupleA.statement, tupleB.statement)
+
+            input_ids = tok(prompt.statement, return_tensors="pt").to("cuda")['input_ids']
+            prompt.set_input_ids(input_ids)
+            hidden_states, poistion_ids, position_embeddings = layer_manager.process_input_tokens(prompt.input_ids)
+            pool.store(
+                layer_id=0,
+                hidden=Hidden(
+                    id=id,
+                    states=hidden_states.clone(),
+                    prompt=prompt,
+                    pos_ids=poistion_ids,
+                    pos_emb=position_embeddings,
+                ),
+            )
+            id+=1
+    
+    print(f"Layer 0 pool initialized with {pool.get_size(0)} hiddens.\n")
+
+
+    print("=== Starting pipeline loop ===")
+    start_time = time.time()
+
+    step_count = 0
+    while True:
+        step_count += 1
+        cont = controller.step(early_exit=False)
+        if not cont:
+            break
+
+    print(f"=== Done in {time.time() - start_time:.2f}s after {step_count} steps ===")
+
+    for lid, hlist in pool.hidden_states.items():
+        print(f"Layer {lid}: {len(hlist)} remaining hiddens")
+
+
+
+def block_join(blockA, blockB):
+    id=0
+    
+    for pageA in blockA.next_page():
+        for pageB in blockB.next_page():
+            for tupleA in pageA.prompt_list:
+                for tupleB in pageB.prompt_list:
+                    prompt = prompt_constructor.construct_prompt(tupleA.statement, tupleB.statement)
+
+                    input_ids = tok(prompt.statement, return_tensors="pt").to("cuda")['input_ids']
+                    prompt.set_input_ids(input_ids)
+                    hidden_states, poistion_ids, position_embeddings = layer_manager.process_input_tokens(prompt.input_ids)
+                    pool.store(
+                        layer_id=0,
+                        hidden=Hidden(
+                            id=id,
+                            states=hidden_states.clone(),
+                            prompt=prompt,
+                            pos_ids=poistion_ids,
+                            pos_emb=position_embeddings,
+                        ),
+                    )
+                    id+=1
+            
+
+    # TODO: In scheduler should check block size and allocate an active page on GPU and non-active page on CPU
+    print(f"Layer 0 pool initialized with {pool.get_size(0)} hiddens.\n")
+    print("=== Starting pipeline loop ===")
+    start_time = time.time()
+
+    step_count = 0
+    while True:
+        step_count += 1
+        cont = controller.step(early_exit=False)
+        if not cont:
+            break
+
+    print(f"=== Done in {time.time() - start_time:.2f}s after {step_count} steps ===")
+
+    for lid, hlist in pool.hidden_states.items():
+        print(f"Layer {lid}: {len(hlist)} remaining hiddens")
+
+
+
 if __name__ == '__main__':
     from prompt import Prompt, PromptConstructor
     from data import BlockPairLoader
@@ -62,10 +147,10 @@ if __name__ == '__main__':
     
     tableA = []
     tableB = []
-    for i in range(1000):
+    for i in range(20):
         tableA.append(f'A-{i}')
 
-    for i in range(1000):
+    for i in range(20):
         tableB.append(f'B-{i}')
 
     avg_seq_len = 500
@@ -80,50 +165,16 @@ if __name__ == '__main__':
         max_batches_per_layer=1
     )
     
-
     bnlj = BlockPairLoader(int(kv_cache_limit ** 0.5), 3)
 
-    i = 0
-    pidx = 0
-    for idx, block_pair in enumerate(bnlj.next(tableA, tableB)):
+    # page join
+    for block_pair in bnlj.next(tableA, tableB):
         blockA, blockB = block_pair
         for pageA in blockA.next_page():
             for pageB in blockB.next_page():
-                for tupleA in pageA.prompt_list:
-                    for tupleB in pageB.prompt_list:
-                        prompt = prompt_constructor.construct_prompt(tupleA.statement, tupleB.statement)
-                        input_ids = tok(prompt.statement, return_tensors="pt").to("cuda")['input_ids']
-                        prompt.set_input_ids(input_ids)
-                        hidden_states, poistion_ids, position_embeddings = layer_manager.process_input_tokens(prompt.input_ids)
-                        pool.store(
-                            layer_id=0,
-                            hidden=Hidden(
-                                id=i,
-                                states=hidden_states.clone(),
-                                prompt=prompt,
-                                pos_ids=poistion_ids,
-                                pos_emb=position_embeddings,
-                            ),
-                        )
-                        i+=1
-                
-                print(f"Layer 0 pool initialized with {pool.get_size(0)} hiddens.\n")
+                page_join(pageA, pageB)
 
-                # page size 
-                if pidx != 0 and pidx % 2 == 0:
-
-                    print("=== Starting pipeline loop ===")
-                    start_time = time.time()
-
-                    step_count = 0
-                    while True:
-                        step_count += 1
-                        cont = controller.step(early_exit=False)
-                        if not cont:
-                            break
-
-                    print(f"=== Done in {time.time() - start_time:.2f}s after {step_count} steps ===")
-
-                    for lid, hlist in pool.hidden_states.items():
-                        print(f"Layer {lid}: {len(hlist)} remaining hiddens")
-                pidx +=1
+    # block join
+    for block_pair in bnlj.next(tableA, tableB):
+        blockA, blockB = block_pair
+        block_join(blockA, blockB)
