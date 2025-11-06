@@ -7,6 +7,18 @@ class LayerwiseHiddenPool:
     def __init__(self):
         self.hidden_states = {}
 
+    def store(self, data, layer_id:int=0, type=Hidden):
+        if type == Hidden:
+            hidden = data
+            if layer_id not in self.hidden_states:
+                self.hidden_states[layer_id] = []
+            self.hidden_states[layer_id].append(hidden)
+        elif type == Page:
+            page = data
+        elif type == Block:
+            block = data
+        
+    
     def store(self, hidden: Hidden, layer_id:int=0):
         if layer_id not in self.hidden_states:
             self.hidden_states[layer_id] = []
@@ -70,7 +82,6 @@ if __name__ == '__main__':
     prompt = 'How are you?' * 100
     input_ids = tok(prompt, return_tensors="pt").to("cuda")['input_ids']
     
-
     for i in range(100):
         hidden_states, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
         pool.store(layer_id=0, hidden=Hidden(id=i, hidden=hidden_states, prompt=prompt, pos_emb=position_embeddings))

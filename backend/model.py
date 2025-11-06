@@ -71,39 +71,10 @@ class LayerManager:
         total_mem = props.total_memory
 
         single_kv_cache_size = self.estimate_kv_size(avg_seq_len, dtype=torch.float16)
-
-        allocated_layers = int((total_mem * 0.2) / single_kv_cache_size)
-        print(f'{allocated_layers} samples as Block allocated in the GPU memory')
-        return allocated_layers
     
-
-    # Compute bound for a given GPU
-    def compute_bound(self, avg_seq_len):
-        import pynvml
-
-        pynvml.nvmlInit()
-
-
-        prompt = "test" * avg_seq_len
-        input_ids = self.tokenizer(prompt, return_tensors="pt").to("cuda")['input_ids']
-        
-        hidden_states, position_ids, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
-
-        h=Hidden(id=0, states=hidden_states, prompt=prompt, pos_ids=position_ids, pos_emb=position_embeddings)
-        print('estimating..')
-        for idx in range(80):
-            self.forward_layer(h, False)
-            h.layer_id = 1
-            
-            handle = pynvml.nvmlDeviceGetHandleByIndex(0)  # GPU 0
-            util = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            
-            print(f"{idx} GPU Utilization: {util.gpu}%")
-            print(f"{idx} Memory Utilization: {util.memory}%")
-        print('estimating done')
-
-        pynvml.nvmlShutdown()
-
+        samples = int((total_mem * 0.2) / single_kv_cache_size)
+        return samples
+     
     def num_layers(self):
         return len(self.model_layers)
     
@@ -203,7 +174,7 @@ class LayerManager:
 
 
     @torch.no_grad()
-    def process_input_tokens(self, input_ids, prompt=None):
+    def process_input_tokens(self, input_ids):
         inputs_embeds = self.embed_tokens(input_ids)
         cache_position = torch.arange(0, inputs_embeds.shape[1], device=inputs_embeds.device)
         position_ids = cache_position.unsqueeze(0)
@@ -235,49 +206,9 @@ class LayerManager:
         elems = 2 * kv_heads * seq_len * head_dim 
         bytes_per_elem = torch.tensor([], dtype=dtype).element_size()
         if num_layers is None:
-            num_layers = self.num_layers()
+            num_layers = self.layer_capacity
         return elems * bytes_per_elem * num_layers
 
-
-    def estimate_flops(self, seq_len, dtype=torch.float16):
-        device = "cuda"
-    
-        num_layers = self.num_layers()
-        hidden_size = self.config.hidden_size
-
-
-        prompt = "test" * seq_len
-        input_ids = self.tokenizer(prompt, return_tensors="pt").to("cuda")['input_ids']
-
-        hidden_states, position_ids, position_embeddings = layer_manager.process_input_tokens(input_ids, prompt)
-
-        h=Hidden(id=0, states=hidden_states, prompt=prompt, pos_ids=position_ids, pos_emb=position_embeddings)
-        print('estimating..')
-
-        n =  500
-        # Warmup
-        with torch.no_grad():
-            for _ in range(10):
-                self.forward_layer(h, False)
-                h.layer_id = 1
-
-        # Timed runs 
-        streams = [torch.cuda.Stream() for _ in range(8)]
-        torch.cuda.synchronize()
-        t0 = time.time()
-        start = time.time()
-        with torch.no_grad():
-            for i in range(n):
-                s = streams[i % len(streams)]
-                with torch.cuda.stream(s):
-                    self.forward_layer(h, False)
-                h.layer_id = 1
-        torch.cuda.synchronize()
-
-        latency = (time.time() - t0) / n
-        tput = n / latency  # sequences/sec
-
-        print(f"bs={n:2d}  latency={latency:.4f}s  seq/s={tput:.1f}")
 
 # test code
 if __name__ == '__main__':
@@ -291,8 +222,8 @@ if __name__ == '__main__':
     sys.path.insert(0, project_root) 
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
-    model_name = "/datasets/ai/llama3/hub/models--meta-llama--Meta-Llama-3-70B/snapshots/c82494877ce7f6d7d317c56ec081328e382c72fe"
     model_name = '/datasets/ai/llama3/hub/models--meta-llama--Llama-3.2-1B/snapshots/4e20de362430cd3b72f300e6b0f18e50e7166e08'
+    model_name = "/datasets/ai/llama3/hub/models--meta-llama--Meta-Llama-3-70B/snapshots/c82494877ce7f6d7d317c56ec081328e382c72fe"
     tok = AutoTokenizer.from_pretrained(model_name)
     model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16, 
                                                 device_map={
@@ -314,6 +245,4 @@ if __name__ == '__main__':
     pool.store(0, Hidden(id=0, states=hidden_states, prompt=prompt, pos_ids=position_ids, pos_emb=position_embeddings))
     layer_manager.switch_active_layers(0)
     layer_manager.estimate_kv_size(500, 16)
-    # layer_manager.compute_bound(500)
-    layer_manager.estimate_flops(500)
     
